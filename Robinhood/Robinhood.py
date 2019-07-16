@@ -15,6 +15,9 @@ import getpass
 import requests
 import six
 import dateutil
+import re
+from urllib.request import Request, urlopen
+from bs4 import BeautifulSoup as soup
 
 #Application-specific imports
 from . import exceptions as RH_exception
@@ -68,6 +71,7 @@ class Robinhood:
         }
         self.session.headers = self.headers
         self.auth_method = self.login_prompt
+        self.device_token = ""
 
     def login_required(function):  # pylint: disable=E0213
         """ Decorator function that prompts user for login if they are not logged in already. Can be applied to any function using the @ notation. """
@@ -85,28 +89,46 @@ class Robinhood:
 
         return self.login(username=username, password=password)
 
+    def GetDeviceToken(self):
+        req = Request("https://robinhood.com/login", headers={'User-Agent': 'Mozilla Chrome Safari'})
+        webpage = urlopen(req).read()
+        urlopen(req).close()
+
+        page_soup = soup(webpage, "lxml")
+        container = str(page_soup.findAll("script"))
+
+        self.device_token = re.search('clientId: "(.+?)"', container).group(1)
 
     def login(self,
               username,
               password,
               mfa_code=None):
         """Save and test login info for Robinhood accounts
-
         Args:
             username (str): username
             password (str): password
-
         Returns:
             (bool): received valid auth token
-
         """
-
         self.username = username
+        self.password = password
+
+        if self.device_token == "":
+            self.GetDeviceToken()
+
+        #(and/or) if self.device_token is invalid: (need to find a way to check for this)
+        #    GetDeviceToken()
+
+
         payload = {
-            'password': password,
+            'password': self.password,
             'username': self.username,
             'grant_type': 'password',
-            'client_id': self.client_id
+            'client_id': self.client_id,
+            'expires_in': '86400',
+            'scope': 'internal',
+            'device_token': self.device_token,
+            'challenge_type': 'sms'
         }
 
         if mfa_code:
@@ -121,6 +143,7 @@ class Robinhood:
         if 'mfa_required' in data.keys():           # pragma: no cover
             mfa_code = input("MFA: ")
             return self.login(username,password,mfa_code)
+            #raise RH_exception.TwoFactorRequired()  # requires a second call to enable 2FA
 
         if 'access_token' in data.keys() and 'refresh_token' in data.keys():
             self.auth_token = data['access_token']
@@ -129,7 +152,6 @@ class Robinhood:
             return True
 
         return False
-
 
     def logout(self):
         """Logout from Robinhood
